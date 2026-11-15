@@ -60,9 +60,21 @@ $('#filters').onclick=e=>{const b=e.target.closest('[data-filter]');if(b){filter
 function close(){show('#overlay',false);editing=null;$('#form').reset();$('#preview').src='';show('#preview',false);$('#formError').textContent=''}
 function open(x){editing=x||null;$('#form').reset();$('#modalTitle').textContent=x?'EDIT WISH':'ADD WISH';for(const k of ['name','category','priority','price','actual','place','link','note'])if(x)$('#form').elements[k].value=x[k]??'';$('#photoHint').textContent=x?.photo_path?'새 사진을 선택하면 교체돼.':'JPG/PNG/WebP · 최대 5MB';show('#preview',false);show('#overlay',true)}
 $('#add').onclick=()=>open(null);$('#close').onclick=close;$('#cancel').onclick=close;$('#overlay').onclick=e=>{if(e.target===$('#overlay'))close()};
-$('#form').elements.photo.onchange=e=>{const file=e.target.files[0];if(!file){show('#preview',false);return}if(file.size>5*1024*1024){$('#formError').textContent='사진은 최대 5MB까지.';e.target.value='';return}$('#preview').src=URL.createObjectURL(file);show('#preview',true)};
+$('#form').elements.photo.onchange=e=>{const file=e.target.files[0];if(!file){show('#preview',false);return}$('#formError').textContent='';$('#preview').src=URL.createObjectURL(file);show('#preview',true)};
+async function preparePhoto(file){
+ if(file.size<=5*1024*1024&&['image/jpeg','image/png','image/webp'].includes(file.type))return file;
+ const image=new Image(),url=URL.createObjectURL(file);
+ try{
+  await new Promise((resolve,reject)=>{image.onload=resolve;image.onerror=()=>reject(Error('이 사진 형식은 브라우저에서 변환할 수 없어요. JPG로 저장한 뒤 다시 선택해 줘.'));image.src=url});
+  const ratio=Math.min(1,1800/Math.max(image.naturalWidth,image.naturalHeight));
+  const canvas=document.createElement('canvas');canvas.width=Math.round(image.naturalWidth*ratio);canvas.height=Math.round(image.naturalHeight*ratio);canvas.getContext('2d').drawImage(image,0,0,canvas.width,canvas.height);
+  const blob=await new Promise((resolve,reject)=>canvas.toBlob(b=>b?resolve(b):reject(Error('사진을 변환할 수 없어요.')),'image/jpeg',0.8));
+  if(blob.size>5*1024*1024)throw Error('사진이 너무 커요. 조금 더 작은 사진을 선택해 줘.');
+  return new File([blob],'triplist-photo.jpg',{type:'image/jpeg'});
+ }finally{URL.revokeObjectURL(url)}
+}
 $('#form').onsubmit=async e=>{e.preventDefault();const f=e.target,button=$('#save');button.disabled=true;$('#formError').textContent='';let uploaded=null;try{
- const file=f.elements.photo.files[0];let path=editing?.photo_path||null;
+ const selected=f.elements.photo.files[0];const file=selected?await preparePhoto(selected):null;let path=editing?.photo_path||null;
  if(file){if(file.size>5*1024*1024)throw Error('사진 크기는 5MB 이하여야 해.');if(!['image/jpeg','image/png','image/webp'].includes(file.type))throw Error('JPG, PNG, WebP 사진을 선택해 줘. (iPhone HEIC는 JPG로 변환 필요)');const ext=file.type==='image/png'?'png':file.type==='image/webp'?'webp':'jpg';uploaded=`${user.id}/${crypto.randomUUID()}.${ext}`;const {error}=await db.storage.from('triplist3-photos').upload(uploaded,file,{contentType:file.type});if(error)throw error;path=uploaded}
  const raw={name:f.elements.name.value.trim(),category:f.elements.category.value,priority:f.elements.priority.value,price:f.elements.price.value===''?null:Number(f.elements.price.value),actual:f.elements.actual.value===''?null:Number(f.elements.actual.value),place:f.elements.place.value.trim(),note:f.elements.note.value.trim(),link:f.elements.link.value.trim(),photo_path:path};if(!raw.name)throw Error('이름을 입력해 줘.');
  const response=editing?await db.from('triplist3_wishes').update(raw).eq('id',editing.id).eq('created_by',user.id):await db.from('triplist3_wishes').insert({...raw,created_by:user.id});if(response.error)throw response.error;close();await load();
